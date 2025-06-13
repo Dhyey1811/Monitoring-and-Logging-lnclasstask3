@@ -6,6 +6,7 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.trace import Status, StatusCode
 
 from random import randint
 from flask import Flask, request
@@ -31,7 +32,6 @@ reader = PeriodicExportingMetricReader(
 metrics.set_meter_provider(MeterProvider(resource=resource, metric_readers=[reader]))
 meter = metrics.get_meter("diceroller.meter")
 
-# Create a counter instrument to make measurements with
 roll_counter = meter.create_counter(
     "dice.rolls",
     description="The number of rolls by roll value",
@@ -44,17 +44,24 @@ logger = logging.getLogger(__name__)
 @app.route("/")
 def roll_dice():
     with tracer.start_as_current_span("roll") as roll_span:
-        player = request.args.get('player', default=None, type=str)
-        result = str(roll())
-        roll_span.set_attribute("roll.value", result)
-        roll_counter.add(1, {"roll.value": result})
+        try:
+            player = request.args.get('player', default=None, type=str)
+            result = str(roll())
+            roll_span.set_attribute("roll.value", result)
+            roll_counter.add(1, {"roll.value": result})
 
-        if player:
-            logger.warning("%s is rolling the dice: %s", player, result)
-        else:
-            logger.warning("Anonymous player is rolling the dice: %s", result)
+            if player:
+                logger.warning("%s is rolling the dice: %s", player, result)
+            else:
+                logger.warning("Anonymous player is rolling the dice: %s", result)
 
-        return result
+            return result
+
+        except Exception as e:
+            roll_span.record_exception(e)
+            roll_span.set_status(Status(StatusCode.ERROR))
+            logger.exception("An error occurred during dice roll")
+            raise
 
 def roll():
     return randint(1, 6)
